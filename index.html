@@ -834,50 +834,60 @@ body.danger-mode{background:#0a0000!important;}
 // RPG HABITOS ULTRA — JS UNIFICADO iOS COMPATIBLE
 // ===================================================
 
-// ===== iOS AudioContext SINGLETON =====
+// ===== iOS AudioContext — creado SOLO dentro de gesto de usuario =====
+// En iOS Safari, crear AudioContext fuera de un tap lo pone en suspended
+// y resume() tampoco funciona si no hay gesto activo. Solución: crear en launchApp().
 let _audioCtx = null;
 let _audioUnlocked = false;
 
 function getAudioCtx(){
-  if(!_audioCtx){
-    try{
-      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }catch(e){ return null; }
-  }
-  // Auto-resume if suspended (happens on iOS after backgrounding)
-  if(_audioCtx && _audioCtx.state === 'suspended'){
+  // NUNCA crear aquí — solo devolver el existente si ya fue creado por gesto
+  if(!_audioCtx) return null;
+  if(_audioCtx.state === 'suspended'){
     _audioCtx.resume().catch(()=>{});
   }
   return _audioCtx;
 }
 
-function iosUnlockAudio(){
+// Llamar SOLO desde dentro de un event handler de tap/click
+function createAndUnlockAudio(){
+  if(_audioUnlocked && _audioCtx) return _audioCtx;
   try{
-    const ctx = getAudioCtx();
-    if(!ctx) return;
-    if(ctx.state === 'suspended') ctx.resume();
-    const buf = ctx.createBuffer(1,1,22050);
-    const src = ctx.createBufferSource();
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // En iOS el contexto puede estar suspended incluso recién creado
+    if(_audioCtx.state === 'suspended'){
+      _audioCtx.resume();
+    }
+    // Buffer silencioso obligatorio para iOS
+    const buf = _audioCtx.createBuffer(1, 1, 22050);
+    const src = _audioCtx.createBufferSource();
     src.buffer = buf;
-    src.connect(ctx.destination);
+    src.connect(_audioCtx.destination);
     src.start(0);
     _audioUnlocked = true;
     const banner = document.getElementById('audioUnlockBanner');
     if(banner) banner.style.display = 'none';
-    const el = document.getElementById('danceAudio');
-    if(el){ el.load(); }
-    showToast('\uD83C\uDFA7 Sonidos activados!');
-  }catch(e){}
+  }catch(e){ console.warn('Audio init failed:', e); }
+  return _audioCtx;
 }
 
-// Re-unlock audio when app comes back from background (iOS suspends AudioContext)
+function iosUnlockAudio(){
+  createAndUnlockAudio();
+  showToast('\uD83C\uDFA7 Sonidos activados!');
+}
+
+// Al volver del background iOS suspende el contexto — reanudar con próximo gesto
 document.addEventListener('visibilitychange', function(){
-  if(document.visibilityState === 'visible' && _audioUnlocked && _audioCtx){
-    if(_audioCtx.state === 'suspended'){
-      _audioCtx.resume().catch(()=>{});
-    }
+  if(document.visibilityState === 'visible' && _audioCtx){
+    _audioCtx.resume().catch(()=>{});
   }
 });
+// También en touchstart por si acaso
+document.addEventListener('touchstart', function(){
+  if(_audioCtx && _audioCtx.state === 'suspended'){
+    _audioCtx.resume().catch(()=>{});
+  }
+}, {passive:true});
 
 function playTone(freq=440, duration=0.15, type='sine', vol=0.04){
   try{
@@ -1960,80 +1970,91 @@ function startSplashLoad(){
 
 // --- Main intro sound (plays on launchApp user gesture) ---
 function playSplashIntro(){
+  // Esta función se llama DENTRO del onclick del botón splash — gesto válido en iOS
+  const ctx = createAndUnlockAudio();
+  if(!ctx) return;
   try{
-    const ctx = getAudioCtx();
-    if(!ctx) return;
-    if(ctx.state === 'suspended') ctx.resume();
-    // Silent unlock buffer
-    const silentBuf = ctx.createBuffer(1,1,22050);
-    const silentSrc = ctx.createBufferSource();
-    silentSrc.buffer = silentBuf;
-    silentSrc.connect(ctx.destination);
-    silentSrc.start(0);
-    _audioUnlocked = true;
     // Rising arpeggio
     const notes=[261,329,392,523,659,784,1046,1318];
     notes.forEach((freq,i)=>{
       setTimeout(()=>{
-        const osc=ctx.createOscillator(),gain=ctx.createGain();
-        osc.type=i<5?'triangle':'sine';
-        osc.frequency.setValueAtTime(freq,ctx.currentTime);
-        gain.gain.setValueAtTime(.07,ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.45);
-        osc.connect(gain);gain.connect(ctx.destination);
-        osc.start(ctx.currentTime);osc.stop(ctx.currentTime+.5);
+        try{
+          const osc=ctx.createOscillator(),gain=ctx.createGain();
+          osc.type=i<5?'triangle':'sine';
+          osc.frequency.setValueAtTime(freq,ctx.currentTime);
+          gain.gain.setValueAtTime(.07,ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.45);
+          osc.connect(gain);gain.connect(ctx.destination);
+          osc.start(ctx.currentTime);osc.stop(ctx.currentTime+.5);
+        }catch(e){}
       }, i*80);
     });
     // Final power chord
     setTimeout(()=>{
-      [523,659,784,1046,1318].forEach((f,i)=>{
+      try{
+        [523,659,784,1046,1318].forEach((f)=>{
+          const osc=ctx.createOscillator(),gain=ctx.createGain();
+          osc.type='triangle';
+          osc.frequency.setValueAtTime(f,ctx.currentTime);
+          gain.gain.setValueAtTime(.06,ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+1.0);
+          osc.connect(gain);gain.connect(ctx.destination);
+          osc.start(ctx.currentTime);osc.stop(ctx.currentTime+1.0);
+        });
+        // Bass hit
         const osc=ctx.createOscillator(),gain=ctx.createGain();
-        osc.type='triangle';
-        osc.frequency.setValueAtTime(f,ctx.currentTime);
-        gain.gain.setValueAtTime(.06,ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+1.0);
+        osc.type='sawtooth';osc.frequency.value=65;
+        gain.gain.setValueAtTime(.08,ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.5);
         osc.connect(gain);gain.connect(ctx.destination);
-        osc.start(ctx.currentTime);osc.stop(ctx.currentTime+1.0);
-      });
-    }, 720);
-    // Bass hit
-    setTimeout(()=>{
-      const osc=ctx.createOscillator(),gain=ctx.createGain();
-      osc.type='sawtooth';osc.frequency.value=65;
-      gain.gain.setValueAtTime(.08,ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.5);
-      osc.connect(gain);gain.connect(ctx.destination);
-      osc.start();osc.stop(ctx.currentTime+.5);
+        osc.start();osc.stop(ctx.currentTime+.5);
+      }catch(e){}
     }, 720);
   } catch(e){}
 }
 
 function launchApp(){
-  // USER GESTURE — unlocks audio on iOS guaranteed
+  // PASO 1: Crear y desbloquear AudioContext SINCRÓNICAMENTE en el gesto
+  // En iOS Safari esto DEBE ocurrir en el call stack del evento táctil
+  createAndUnlockAudio();
+
+  // PASO 2: Tocar el intro (ya con contexto desbloqueado)
   playSplashIntro();
+
   const banner = document.getElementById('audioUnlockBanner');
   if(banner) banner.style.display='none';
 
-  // Complete load bar instantly
+  // Completar barra de carga
   const bar=document.getElementById('splashLoadBar');
   const pct=document.getElementById('splashLoadPct');
   if(bar){bar.style.transition='width .3s ease';bar.style.width='100%';}
   if(pct){setTimeout(()=>{pct.textContent='100%';},100);}
   if(_splashLoadIv) clearInterval(_splashLoadIv);
 
-  // Flash + hide
+  // Flash + ocultar splash
   setTimeout(()=>{
     const flash=document.getElementById('splashExitFlash');
     if(flash) flash.classList.add('flash');
     const splash=document.getElementById('splashScreen');
-    if(splash){splash.classList.add('hiding');}
-    // vibrate on launch
+    if(splash) splash.classList.add('hiding');
     if(navigator.vibrate) navigator.vibrate([40,20,80,20,120]);
     setTimeout(()=>{
       if(splash) splash.classList.add('hidden');
     }, 600);
   }, 350);
 }
+
+// Belt-and-suspenders: también añadir listener directo al botón
+// por si el onclick inline no se ejecuta como gesto en algún browser
+document.addEventListener('DOMContentLoaded', function(){
+  const btn = document.getElementById('splashBtn');
+  if(btn){
+    btn.addEventListener('touchend', function(e){
+      e.preventDefault();
+      launchApp();
+    }, {once:true, passive:false});
+  }
+});
 
 // Init splash
 drawSplashHero();
