@@ -851,20 +851,25 @@ function getAudioCtx(){
 
 // Llamar SOLO desde dentro de un event handler de tap/click
 function createAndUnlockAudio(){
-  if(_audioUnlocked && _audioCtx) return _audioCtx;
+  if(_audioUnlocked && _audioCtx && _audioCtx.state === 'running') return _audioCtx;
   try{
-    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // En iOS el contexto puede estar suspended incluso recién creado
-    if(_audioCtx.state === 'suspended'){
-      _audioCtx.resume();
+    if(!_audioCtx){
+      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    // Buffer silencioso obligatorio para iOS
+    // Disparar buffer silencioso SINCRÓNICAMENTE — esto es lo que iOS necesita
     const buf = _audioCtx.createBuffer(1, 1, 22050);
     const src = _audioCtx.createBufferSource();
     src.buffer = buf;
     src.connect(_audioCtx.destination);
     src.start(0);
-    _audioUnlocked = true;
+    // Luego resume() — también necesario en algunos casos
+    if(_audioCtx.state === 'suspended'){
+      _audioCtx.resume().then(()=>{
+        _audioUnlocked = true;
+      }).catch(()=>{});
+    } else {
+      _audioUnlocked = true;
+    }
     const banner = document.getElementById('audioUnlockBanner');
     if(banner) banner.style.display = 'none';
   }catch(e){ console.warn('Audio init failed:', e); }
@@ -893,17 +898,25 @@ function playTone(freq=440, duration=0.15, type='sine', vol=0.04){
   try{
     const ctx = getAudioCtx();
     if(!ctx) return;
-    if(ctx.state === 'suspended') ctx.resume();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, ctx.currentTime);
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + duration);
+    const fire = () => {
+      try{
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gain.gain.setValueAtTime(vol, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + duration);
+      }catch(e){}
+    };
+    if(ctx.state === 'suspended'){
+      ctx.resume().then(fire).catch(()=>{});
+    } else {
+      fire();
+    }
   }catch(e){}
 }
 
@@ -931,16 +944,24 @@ function playCreepy(){
   try{
     const ctx = getAudioCtx();
     if(!ctx) return;
-    if(ctx.state==='suspended') ctx.resume();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = 'sawtooth';
-    o.frequency.setValueAtTime(180, ctx.currentTime);
-    o.frequency.exponentialRampToValueAtTime(40, ctx.currentTime+0.8);
-    g.gain.setValueAtTime(0.06, ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.8);
-    o.connect(g); g.connect(ctx.destination);
-    o.start(); o.stop(ctx.currentTime+0.8);
+    const fire = () => {
+      try{
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(180, ctx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(40, ctx.currentTime+0.8);
+        g.gain.setValueAtTime(0.06, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.8);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(); o.stop(ctx.currentTime+0.8);
+      }catch(e){}
+    };
+    if(ctx.state === 'suspended'){
+      ctx.resume().then(fire).catch(()=>{});
+    } else {
+      fire();
+    }
   }catch(e){}
 }
 
@@ -980,21 +1001,21 @@ function getEnemies(){
 }
 
 const DARK_PHRASES=[
-  "No es que estes progresando... es que el resto retrocede mas rapido retrasado.",
-  "Cada habito que haces es un dia mas que no te arrepientes en el hospital gilipollas.",
-  "El gym no te hara feliz. Pero el sofa tampoco capullo.",
-  "Mientras estudias, otros programadores ya están ganando lo que tú soñarás pobre d mierda.",
-  "Tu novia mira a otros hombres en la calle. Tú ni siquiera puedes mirarte al espejo pringao.",
-  "El exito es aburrido. Por eso no vas a llegar no?.",
-  "TikTok te ha robado el cerebro. Eres un gilipollas con pulgares.",
-  "Cada dia que fallas, tu yo futuro te manda una factura gilipollas.",
-  "No es motivacion lo que te falta. Es consecuencias retardado.",
-  "La disciplina es hacer lo correcto cuando menos ganas tienes tonto del culo.",
-  "Fallaste ayer. Dato. Fallaste hoy. Tendencia. Manana decides quien eres invecil.",
-  "Eres o la excusa o el resultado. No hay puntos intermedios retardado.",
-  "Tu mente es un gallinero. No puedes concentrarte ni para cagar",
-  "Cada vez que lo haces, te vuelves más débil. Eres un esclavo de mierda",
-  "Tres dias de racha y ya te crees alguien capullo. Seis y empieza a ser real."
+  "No es que estes progresando... es que el resto retrocede mas rapido.",
+  "Cada habito que haces es un dia mas que no te arrepientes en el hospital.",
+  "El gym no te hara feliz. Pero el sofa tampoco.",
+  "Estudiar 3 horas. O puedes ver TikTok y llorar en 2026. Tu decides.",
+  "Soy un pixel. Tu eres carne. Y aun asi, yo tengo mas disciplina.",
+  "El exito es aburrido. Por eso casi nadie llega.",
+  "Deep work: porque scrollear no te paga el alquiler.",
+  "Cada dia que fallas, tu yo futuro te manda una factura.",
+  "No es motivacion lo que te falta. Es consecuencias.",
+  "La disciplina es hacer lo correcto cuando menos ganas tienes.",
+  "Fallaste ayer. Dato. Fallaste hoy. Tendencia. Manana decides quien eres.",
+  "Eres o la excusa o el resultado. No hay puntos intermedios.",
+  "El descanso se gana. El sofa se hereda.",
+  "Tu mente quiere series. Tu cuerpo quiere el sofa. Ninguno paga facturas.",
+  "Tres dias de racha y ya te crees campen. Seis y empieza a ser real."
 ];
 
 const epicMessages=[
@@ -1970,29 +1991,35 @@ function startSplashLoad(){
 
 // --- Main intro sound (plays on launchApp user gesture) ---
 function playSplashIntro(){
-  // Esta función se llama DENTRO del onclick del botón splash — gesto válido en iOS
-  const ctx = createAndUnlockAudio();
+  const ctx = _audioCtx;
   if(!ctx) return;
-  try{
-    // Rising arpeggio
-    const notes=[261,329,392,523,659,784,1046,1318];
-    notes.forEach((freq,i)=>{
-      setTimeout(()=>{
-        try{
-          const osc=ctx.createOscillator(),gain=ctx.createGain();
-          osc.type=i<5?'triangle':'sine';
-          osc.frequency.setValueAtTime(freq,ctx.currentTime);
-          gain.gain.setValueAtTime(.07,ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.45);
-          osc.connect(gain);gain.connect(ctx.destination);
-          osc.start(ctx.currentTime);osc.stop(ctx.currentTime+.5);
-        }catch(e){}
-      }, i*80);
-    });
-    // Final power chord
+
+  function fireNote(freq, type, vol, delay){
     setTimeout(()=>{
       try{
-        [523,659,784,1046,1318].forEach((f)=>{
+        const play = () => {
+          const osc=ctx.createOscillator(), gain=ctx.createGain();
+          osc.type=type;
+          osc.frequency.setValueAtTime(freq, ctx.currentTime);
+          gain.gain.setValueAtTime(vol, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.45);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(ctx.currentTime); osc.stop(ctx.currentTime+0.5);
+        };
+        if(ctx.state==='suspended') ctx.resume().then(play).catch(()=>{});
+        else play();
+      }catch(e){}
+    }, delay);
+  }
+
+  const notes=[261,329,392,523,659,784,1046,1318];
+  notes.forEach((freq,i) => fireNote(freq, i<5?'triangle':'sine', 0.07, i*80));
+
+  // Acorde final + bajo
+  setTimeout(()=>{
+    try{
+      const play = () => {
+        [523,659,784,1046,1318].forEach(f=>{
           const osc=ctx.createOscillator(),gain=ctx.createGain();
           osc.type='triangle';
           osc.frequency.setValueAtTime(f,ctx.currentTime);
@@ -2001,16 +2028,17 @@ function playSplashIntro(){
           osc.connect(gain);gain.connect(ctx.destination);
           osc.start(ctx.currentTime);osc.stop(ctx.currentTime+1.0);
         });
-        // Bass hit
         const osc=ctx.createOscillator(),gain=ctx.createGain();
         osc.type='sawtooth';osc.frequency.value=65;
         gain.gain.setValueAtTime(.08,ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.5);
         osc.connect(gain);gain.connect(ctx.destination);
         osc.start();osc.stop(ctx.currentTime+.5);
-      }catch(e){}
-    }, 720);
-  } catch(e){}
+      };
+      if(ctx.state==='suspended') ctx.resume().then(play).catch(()=>{});
+      else play();
+    }catch(e){}
+  }, 720);
 }
 
 function launchApp(){
